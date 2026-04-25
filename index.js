@@ -131,4 +131,5 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ok: true}));
+app.get('/privacy', (req, res) => res.send('Este aplicativo é de uso pessoal e não compartilha dados com terceiros.'));
 app.listen(process.env.PORT || 3000, () => console.log('Bot rodando!'));
