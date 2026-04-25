@@ -94,14 +94,14 @@ async function sendTelegram(chatId, message){
 // Webhook do Telegram
 app.post('/webhook', async (req, res) => {
   try {
+    console.log('Recebido:', JSON.stringify(req.body));
     const message = req.body?.message;
     if (!message || !message.text) return res.sendStatus(200);
 
     const chatId = message.chat.id;
     const text = message.text;
 
-    // Segurança: só responde para o seu chat
-    if (String(chatId) !== String(process.env.MEU_CHAT_ID)) return res.sendStatus(200);
+    console.log('Chat ID recebido:', chatId, '| Esperado:', process.env.MEU_CHAT_ID);
 
     const resposta = await processMessage(text);
     await sendTelegram(chatId, resposta);
