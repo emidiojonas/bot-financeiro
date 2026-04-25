@@ -92,7 +92,7 @@ async function sendTelegram(chatId, message){
 }
 
 // Webhook do Telegram
-app.post('/webhook', async (req, res) => {
+app.post(`/webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
   try {
     console.log('Recebido:', JSON.stringify(req.body));
     const message = req.body?.message;
