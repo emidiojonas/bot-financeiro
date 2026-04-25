@@ -6,6 +6,8 @@ const app = express();
 app.use(express.json());
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 const CC_CATS = ['Mercado','Feira','Padaria','Transporte','Lazer','Vestimenta','Eletrônicos','Utensílios para casa','Eletrodomésticos','Móveis','Presentes','Assinaturas','Farmácia','Saúde/Consultas','Restaurantes','Acessórios','Uber','Livros','Manutenção','Outros'];
 const FIX_CATS = ['Aluguel','Água','Luz','Internet','Celular','TV','Plano funerário','Empréstimo'];
@@ -82,47 +84,27 @@ async function processMessage(text){
   return 'Não entendi. Exemplos:\n"Gastei 45 na farmácia"\n"Uber 22 reais"\n"Saldo disponível"\n"Resumo do mês"';
 }
 
-async function sendWhatsApp(to, message){
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_ID}/messages`,
-    {
-      messaging_product: 'whatsapp',
-      to: to,
-      type: 'text',
-      text: { body: message }
-    },
-    { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` } }
-  );
+async function sendTelegram(chatId, message){
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    chat_id: chatId,
+    text: message
+  });
 }
 
-// Verificação do webhook pela Meta
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log('Webhook verificado!');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-// Receber mensagens da Meta
+// Webhook do Telegram
 app.post('/webhook', async (req, res) => {
   try {
-    const entry = req.body?.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const messages = value?.messages;
-    if (!messages || messages.length === 0) return res.sendStatus(200);
-    const msg = messages[0];
-    const from = msg.from;
-    const text = msg.text?.body;
-    if (!text) return res.sendStatus(200);
-    if (from !== process.env.MEU_NUMERO) return res.sendStatus(200);
+    const message = req.body?.message;
+    if (!message || !message.text) return res.sendStatus(200);
+
+    const chatId = message.chat.id;
+    const text = message.text;
+
+    // Segurança: só responde para o seu chat
+    if (String(chatId) !== String(process.env.MEU_CHAT_ID)) return res.sendStatus(200);
+
     const resposta = await processMessage(text);
-    await sendWhatsApp(from, resposta);
+    await sendTelegram(chatId, resposta);
     res.sendStatus(200);
   } catch(e) {
     console.error(e);
@@ -132,4 +114,4 @@ app.post('/webhook', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ok: true}));
 app.get('/privacy', (req, res) => res.send('Este aplicativo é de uso pessoal e não compartilha dados com terceiros.'));
-app.listen(process.env.PORT || 3000, () => console.log('Bot rodando!'));
+app.listen(process.env.PORT || 3000, () => console.log('Bot Telegram rodando!'));
