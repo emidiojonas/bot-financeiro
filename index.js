@@ -4,6 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const app = express();
 app.use(express.json());
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const CC_CATS = ['Mercado','Feira','Padaria','Transporte','Lazer','Vestimenta','Eletrônicos','Utensílios para casa','Eletrodomésticos','Móveis','Presentes','Assinaturas','Farmácia','Saúde/Consultas','Restaurantes','Acessórios','Uber','Livros','Manutenção','Outros'];
@@ -81,21 +82,53 @@ async function processMessage(text){
   return 'Não entendi. Exemplos:\n"Gastei 45 na farmácia"\n"Uber 22 reais"\n"Saldo disponível"\n"Resumo do mês"';
 }
 
-async function sendWhatsApp(number,message){
-  await axios.post(`${process.env.EVOLUTION_API_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,{number,text:message},{headers:{apikey:process.env.EVOLUTION_API_KEY}});
+async function sendWhatsApp(to, message){
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_ID}/messages`,
+    {
+      messaging_product: 'whatsapp',
+      to: to,
+      type: 'text',
+      text: { body: message }
+    },
+    { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` } }
+  );
 }
 
-app.post('/webhook',async(req,res)=>{
-  try{
-    const msg=req.body?.data?.message?.conversation;
-    const from=req.body?.data?.key?.remoteJid;
-    if(!msg||!from) return res.sendStatus(200);
-    if(from!==process.env.MEU_NUMERO+'@s.whatsapp.net') return res.sendStatus(200);
-    const resposta=await processMessage(msg);
-    await sendWhatsApp(from,resposta);
-    res.sendStatus(200);
-  }catch(e){console.error(e);res.sendStatus(500);}
+// Verificação do webhook pela Meta
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    console.log('Webhook verificado!');
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
 });
 
-app.get('/health',(req,res)=>res.json({ok:true}));
-app.listen(process.env.PORT||3000,()=>console.log('Bot rodando!'));
+// Receber mensagens da Meta
+app.post('/webhook', async (req, res) => {
+  try {
+    const entry = req.body?.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const messages = value?.messages;
+    if (!messages || messages.length === 0) return res.sendStatus(200);
+    const msg = messages[0];
+    const from = msg.from;
+    const text = msg.text?.body;
+    if (!text) return res.sendStatus(200);
+    if (from !== process.env.MEU_NUMERO) return res.sendStatus(200);
+    const resposta = await processMessage(text);
+    await sendWhatsApp(from, resposta);
+    res.sendStatus(200);
+  } catch(e) {
+    console.error(e);
+    res.sendStatus(500);
+  }
+});
+
+app.get('/health', (req, res) => res.json({ok: true}));
+app.listen(process.env.PORT || 3000, () => console.log('Bot rodando!'));
