@@ -1,13 +1,11 @@
 require('dotenv').config();
-const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
-const app = express();
-app.use(express.json());
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+const MEU_CHAT_ID = String(process.env.MEU_CHAT_ID);
 
 const CC_CATS = ['Mercado','Feira','Padaria','Transporte','Lazer','Vestimenta','Eletrônicos','Utensílios para casa','Eletrodomésticos','Móveis','Presentes','Assinaturas','Farmácia','Saúde/Consultas','Restaurantes','Acessórios','Uber','Livros','Manutenção','Outros'];
 const FIX_CATS = ['Aluguel','Água','Luz','Internet','Celular','TV','Plano funerário','Empréstimo'];
@@ -85,33 +83,35 @@ async function processMessage(text){
 }
 
 async function sendTelegram(chatId, message){
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: chatId,
-    text: message
-  });
+  await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: message });
 }
 
-// Webhook do Telegram
-app.post(`/webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
+// POLLING — sem webhook, o bot pergunta ao Telegram a cada segundo
+let offset = 0;
+
+async function poll() {
   try {
-    console.log('Recebido:', JSON.stringify(req.body));
-    const message = req.body?.message;
-    if (!message || !message.text) return res.sendStatus(200);
-
-    const chatId = message.chat.id;
-    const text = message.text;
-
-    console.log('Chat ID recebido:', chatId, '| Esperado:', process.env.MEU_CHAT_ID);
-
-    const resposta = await processMessage(text);
-    await sendTelegram(chatId, resposta);
-    res.sendStatus(200);
+    const res = await axios.get(`${TELEGRAM_API}/getUpdates`, {
+      params: { offset, timeout: 30 },
+      timeout: 35000
+    });
+    const updates = res.data.result || [];
+    for (const update of updates) {
+      offset = update.update_id + 1;
+      const message = update.message;
+      if (!message || !message.text) continue;
+      const chatId = String(message.chat.id);
+      const text = message.text;
+      console.log(`Mensagem de ${chatId}: ${text}`);
+      if (chatId !== MEU_CHAT_ID) continue;
+      const resposta = await processMessage(text);
+      await sendTelegram(chatId, resposta);
+    }
   } catch(e) {
-    console.error(e);
-    res.sendStatus(500);
+    console.error('Erro no polling:', e.message);
   }
-});
+  setTimeout(poll, 1000);
+}
 
-app.get('/health', (req, res) => res.json({ok: true}));
-app.get('/privacy', (req, res) => res.send('Este aplicativo é de uso pessoal e não compartilha dados com terceiros.'));
-app.listen(process.env.PORT || 10000, () => console.log('Bot Telegram rodando!'));
+console.log('Bot Telegram rodando com polling!');
+poll();
