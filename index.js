@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 
@@ -86,9 +87,15 @@ async function sendTelegram(chatId, message){
   await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: message });
 }
 
-// POLLING — sem webhook, o bot pergunta ao Telegram a cada segundo
-let offset = 0;
+// Servidor HTTP mínimo para o Render não derrubar o serviço
+const PORT = process.env.PORT || 10000;
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('ok');
+}).listen(PORT, () => console.log(`Servidor HTTP na porta ${PORT}`));
 
+// POLLING
+let offset = 0;
 async function poll() {
   try {
     const res = await axios.get(`${TELEGRAM_API}/getUpdates`, {
