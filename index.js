@@ -105,15 +105,28 @@ async function processMessage(text) {
 
   // Saldo/limite de cartão específico
   const saldoCartaoMatch = norm.match(/saldo.*cartao|limite.*cartao|cartao.*saldo|cartao.*limite/);
-  if (saldoCartaoMatch || /quanto.*cartao|cartao.*quanto/.test(norm)) {
+  if (saldoCartaoMatch || /quanto.*cartao|cartao.*quanto|resumo.*cartao|cartao.*resumo/.test(norm)) {
     const idx = extractCartao(norm, cartoes);
     if (idx !== null) {
       const cartao = cartoes[idx];
-      const {data} = await supabase.from('transactions').select('valor').eq('tipo','cc').eq('cartao_idx', idx).gte('data', mes+'-01');
-      const gasto = (data||[]).reduce((s,t)=>s+parseFloat(t.valor),0);
+      const {data} = await supabase.from('transactions').select('valor,categoria').eq('tipo','cc').eq('cartao_idx', idx).gte('data', mes+'-01');
+      const txns = data||[];
+      const gasto = txns.reduce((s,t)=>s+parseFloat(t.valor),0);
       const limite = cartao.limite || 0;
       const saldo = limite - gasto;
-      return `💳 *${cartao.nome}*\n\nLimite: ${fmt(limite)}\nGasto no mês: ${fmt(gasto)}\nDisponível: *${fmt(saldo)}*`;
+      // Agrupa por categoria
+      const catMap = {};
+      txns.forEach(t=>{ catMap[t.categoria]=(catMap[t.categoria]||0)+parseFloat(t.valor); });
+      const topCats = Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
+      let r = `💳 *${cartao.nome}*\n\n`;
+      if (limite>0) r += `Limite: ${fmt(limite)}\n`;
+      r += `Gasto no mês: ${fmt(gasto)}\n`;
+      if (limite>0) r += `Disponível: *${fmt(saldo)}*`;
+      if (topCats.length) {
+        r += '\n\n📊 *Por categoria:*\n';
+        topCats.forEach(([cat,val])=>{ r+=`  • ${cat}: ${fmt(val)}\n`; });
+      }
+      return r.trim();
     }
     // Lista todos os cartões
     let r = '💳 *Resumo dos Cartões*\n\n';
@@ -122,28 +135,48 @@ async function processMessage(text) {
       const {data} = await supabase.from('transactions').select('valor').eq('tipo','cc').eq('cartao_idx',i).gte('data',mes+'-01');
       const gasto = (data||[]).reduce((s,t)=>s+parseFloat(t.valor),0);
       const limite = cartoes[i].limite||0;
-      r += `*${cartoes[i].nome}*: ${fmt(gasto)} de ${fmt(limite)} (disponível: ${fmt(limite-gasto)})\n`;
+      r += `*${cartoes[i].nome}*: ${fmt(gasto)}${limite?' de '+fmt(limite)+' (disp: '+fmt(limite-gasto)+')':''}\n`;
     }
     return r.trim();
   }
 
+  // Gasto de categoria específica (com ou sem cartão)
+  if (/quanto.*gast|gast.*quanto|gast.*categoria|categoria.*gast/.test(norm)) {
+    const CC_CATS_ALL = ['Mercado','Feira','Padaria','Transporte','Lazer','Vestimenta','Eletrônicos','Utensílios para casa','Eletrodomésticos','Móveis','Presentes','Assinaturas','Farmácia','Saúde/Consultas','Restaurantes','Acessórios','Uber','Livros','Manutenção','iFood','Gasolina','Outros'];
+    const FIX_CATS_ALL = ['Aluguel','Água','Luz','Internet','Celular','TV','Plano funerário','Plano de Saúde','Empréstimo 1','Empréstimo 2','Empréstimo 3','Dízimo','Ofertas'];
+    const allCats = [...CC_CATS_ALL, ...FIX_CATS_ALL];
+    let foundCat = null;
+    for (const cat of allCats) {
+      const parts = normalize(cat).split(' ');
+      if (parts.some(p=>p.length>2&&norm.includes(p))) { foundCat=cat; break; }
+    }
+    if (foundCat) {
+      const cartaoIdx = extractCartao(norm, cartoes);
+      let query = supabase.from('transactions').select('valor,cartao_idx').eq('categoria',foundCat).gte('data',mes+'-01');
+      if (cartaoIdx !== null) query = query.eq('cartao_idx', cartaoIdx);
+      const {data} = await query;
+      const txns = data||[];
+      const gasto = txns.reduce((s,t)=>s+parseFloat(t.valor),0);
+      let r = `📊 *${foundCat}*`;
+      if (cartaoIdx !== null) r += ` — ${cartoes[cartaoIdx].nome}`;
+      r += `\n\nGasto no mês: *${fmt(gasto)}*`;
+      return r;
+    }
+  }
+
   // Orçamento de categoria específica
-  const orcCats = [...CC_CATS, ...FIX_CATS];
-  const orcKeys = [...Array(CC_CATS.length).fill('cc'), ...Array(FIX_CATS.length).fill('fix')];
+  const orcCats = ['Mercado','Feira','Padaria','Farmácia','Restaurantes','iFood','Uber','Transporte','Gasolina','Assinaturas','Lazer','Saúde/Consultas','Vestimenta','Outros','Aluguel','Água','Luz','Internet','Celular','TV','Plano funerário','Plano de Saúde','Empréstimo 1','Empréstimo 2','Empréstimo 3','Dízimo','Ofertas'];
+  const orcIds =  ['Mercado','Feira','Padaria','Farmacia','Restaurantes','iFood','Uber','Transporte','Gasolina','Assinaturas','Lazer','Saude','Vestimenta','Outros','Aluguel','Agua','Luz','Internet','Celular','TV','PlanoFunerario','PlanoSaude','Emprestimo1','Emprestimo2','Emprestimo3','Dizimo','Ofertas'];
+  const orcTipo =  ['cc','cc','cc','cc','cc','cc','cc','cc','cc','cc','cc','cc','cc','cc','fix','fix','fix','fix','fix','fix','fix','fix','fix','fix','fix','fix','fix'];
   if (/orcamento|quanto.*ainda|saldo.*categoria|restante/.test(norm)) {
     for (let i=0; i<orcCats.length; i++) {
-      const catNorm = normalize(orcCats[i]);
-      const parts = catNorm.split(' ');
-      const found = parts.some(p => p.length > 2 && norm.includes(p));
-      if (found) {
+      const parts = normalize(orcCats[i]).split(' ');
+      if (parts.some(p=>p.length>2&&norm.includes(p))) {
         const cat = orcCats[i];
-        const tipo = orcKeys[i];
-        const orcMap = tipo==='cc' ? cfg.orcCC : cfg.orcFix;
-        // encontrar chave do orçamento
-        const orcVal = Object.values(orcMap||{})[i] || 0;
+        const orcMap = orcTipo[i]==='cc' ? cfg.orcCC : cfg.orcFix;
+        const orc = parseFloat(orcMap?.[orcIds[i]])||0;
         const {data} = await supabase.from('transactions').select('valor').eq('categoria',cat).gte('data',mes+'-01');
         const gasto = (data||[]).reduce((s,t)=>s+parseFloat(t.valor),0);
-        const orc = parseFloat(orcVal)||0;
         const restante = orc - gasto;
         return `📊 *${cat}*\n\nOrçamento: ${fmt(orc)}\nGasto: ${fmt(gasto)}\nRestante: *${fmt(restante)}*`;
       }
@@ -203,7 +236,7 @@ async function processMessage(text) {
     return r;
   }
 
-  return `Não entendi. Exemplos:\n\n*Registrar gasto:*\n"Gastei 45 na farmácia no Neon"\n"Uber 22 reais no Santander"\n"Aluguel 800"\n\n*Consultar:*\n"Saldo disponível"\n"Saldo do cartão Neon"\n"Orçamento do mercado"\n"Resumo do mês"`;
+  return `Não entendi. Exemplos:\n\n*Registrar gasto:*\n"Gastei 45 na farmácia no Neon"\n"Uber 22 reais no Santander"\n"Aluguel 800"\n\n*Consultar:*\n"Saldo disponível"\n"Resumo do cartão Neon"\n"Quanto gastei de mercado no Neon"\n"Quanto gastei de farmácia"\n"Orçamento do mercado"\n"Resumo do mês"`;
 }
 
 async function sendTelegram(chatId, message) {
