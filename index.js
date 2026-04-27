@@ -98,11 +98,10 @@ async function setWebhook(){
   }
 }
 
-// Auto-ping a cada 4 minutos para manter o servidor acordado
 function startAutoPing() {
   setInterval(async () => {
     try {
-      await axios.get(`${RENDER_URL}/`);
+      await axios.get(`${RENDER_URL}/ping`);
       console.log('Auto-ping OK:', new Date().toISOString());
     } catch(e) {
       console.log('Auto-ping falhou:', e.message);
@@ -113,18 +112,19 @@ function startAutoPing() {
 const PORT = process.env.PORT || 10000;
 http.createServer(async (req, res) => {
 
-  // Health check para o cron job (aceita qualquer GET)
-  if (req.method === 'GET') {
+  // Health check — somente GET /ping ou GET /
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/ping')) {
     res.writeHead(200);
     res.end('ok');
     return;
   }
 
-  // Webhook — recebe mensagens do Telegram
+  // Webhook do Telegram — somente POST /webhook
   if (req.method === 'POST' && req.url === '/webhook') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
+      console.log('POST /webhook recebido, body:', body.substring(0, 200));
       try {
         const update = JSON.parse(body);
         const message = update.message;
@@ -135,6 +135,9 @@ http.createServer(async (req, res) => {
           if (chatId === MEU_CHAT_ID) {
             const resposta = await processMessage(text);
             await sendTelegram(chatId, resposta);
+            console.log('Resposta enviada com sucesso!');
+          } else {
+            console.log(`Chat ID ${chatId} não autorizado. Esperado: ${MEU_CHAT_ID}`);
           }
         }
       } catch(e) {
@@ -146,6 +149,8 @@ http.createServer(async (req, res) => {
     return;
   }
 
+  // Qualquer outra rota
+  console.log(`Rota não encontrada: ${req.method} ${req.url}`);
   res.writeHead(404);
   res.end('not found');
 
