@@ -98,18 +98,29 @@ async function setWebhook(){
   }
 }
 
-// Servidor HTTP que recebe as mensagens do Telegram via webhook
+// Auto-ping a cada 4 minutos para manter o servidor acordado
+function startAutoPing() {
+  setInterval(async () => {
+    try {
+      await axios.get(`${RENDER_URL}/`);
+      console.log('Auto-ping OK:', new Date().toISOString());
+    } catch(e) {
+      console.log('Auto-ping falhou:', e.message);
+    }
+  }, 4 * 60 * 1000);
+}
+
 const PORT = process.env.PORT || 10000;
 http.createServer(async (req, res) => {
 
-  // Rota de health check (para o cron job manter o servidor acordado)
-  if (req.method === 'GET' && req.url === '/') {
+  // Health check para o cron job (aceita qualquer GET)
+  if (req.method === 'GET') {
     res.writeHead(200);
     res.end('ok');
     return;
   }
 
-  // Rota do webhook — aqui chegam as mensagens do Telegram
+  // Webhook — recebe mensagens do Telegram
   if (req.method === 'POST' && req.url === '/webhook') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
@@ -141,4 +152,6 @@ http.createServer(async (req, res) => {
 }).listen(PORT, async () => {
   console.log(`Servidor HTTP na porta ${PORT}`);
   await setWebhook();
+  startAutoPing();
+  console.log('Auto-ping iniciado (a cada 4 minutos)');
 });
