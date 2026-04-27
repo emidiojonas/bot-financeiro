@@ -7,6 +7,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const MEU_CHAT_ID = String(process.env.MEU_CHAT_ID);
+const RENDER_URL = 'https://bot-financeiro-eu35.onrender.com';
 
 const CC_CATS = ['Mercado','Feira','Padaria','Transporte','Lazer','Vestimenta','Eletrônicos','Utensílios para casa','Eletrodomésticos','Móveis','Presentes','Assinaturas','Farmácia','Saúde/Consultas','Restaurantes','Acessórios','Uber','Livros','Manutenção','Outros'];
 const FIX_CATS = ['Aluguel','Água','Luz','Internet','Celular','TV','Plano funerário','Empréstimo'];
@@ -87,38 +88,57 @@ async function sendTelegram(chatId, message){
   await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: message });
 }
 
-// Servidor HTTP mínimo para o Render não derrubar o serviço
-const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('ok');
-}).listen(PORT, () => console.log(`Servidor HTTP na porta ${PORT}`));
-
-// POLLING
-let offset = 0;
-async function poll() {
+async function setWebhook(){
+  const url = `${RENDER_URL}/webhook`;
   try {
-    const res = await axios.get(`${TELEGRAM_API}/getUpdates`, {
-      params: { offset, timeout: 30 },
-      timeout: 35000
-    });
-    const updates = res.data.result || [];
-    for (const update of updates) {
-      offset = update.update_id + 1;
-      const message = update.message;
-      if (!message || !message.text) continue;
-      const chatId = String(message.chat.id);
-      const text = message.text;
-      console.log(`Mensagem de ${chatId}: ${text}`);
-      if (chatId !== MEU_CHAT_ID) continue;
-      const resposta = await processMessage(text);
-      await sendTelegram(chatId, resposta);
-    }
+    const res = await axios.post(`${TELEGRAM_API}/setWebhook`, { url, drop_pending_updates: true });
+    console.log('Webhook configurado:', res.data);
   } catch(e) {
-    console.error('Erro no polling:', e.message);
+    console.error('Erro ao configurar webhook:', e.message);
   }
-  setTimeout(poll, 1000);
 }
 
-console.log('Bot Telegram rodando com polling!');
-poll();
+// Servidor HTTP que recebe as mensagens do Telegram via webhook
+const PORT = process.env.PORT || 10000;
+http.createServer(async (req, res) => {
+
+  // Rota de health check (para o cron job manter o servidor acordado)
+  if (req.method === 'GET' && req.url === '/') {
+    res.writeHead(200);
+    res.end('ok');
+    return;
+  }
+
+  // Rota do webhook — aqui chegam as mensagens do Telegram
+  if (req.method === 'POST' && req.url === '/webhook') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const update = JSON.parse(body);
+        const message = update.message;
+        if (message && message.text) {
+          const chatId = String(message.chat.id);
+          const text = message.text;
+          console.log(`Mensagem de ${chatId}: ${text}`);
+          if (chatId === MEU_CHAT_ID) {
+            const resposta = await processMessage(text);
+            await sendTelegram(chatId, resposta);
+          }
+        }
+      } catch(e) {
+        console.error('Erro ao processar update:', e.message);
+      }
+      res.writeHead(200);
+      res.end('ok');
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('not found');
+
+}).listen(PORT, async () => {
+  console.log(`Servidor HTTP na porta ${PORT}`);
+  await setWebhook();
+});
